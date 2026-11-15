@@ -37,43 +37,32 @@ final class ProbeTests: XCTestCase {
             for k in probes { let t = texts(k); print("LEARN|\(tag)|\(k)|\(t.joined(separator: " "))|same as fresh=\(t == fresh[k]!)") }
         }
         teach(); check("taught")
-
-        // 2b: Settings
-        var t0 = Date()
-        let ok = resetDictionary()
-        print("RESET|settings|\(ok)|\(Int(Date().timeIntervalSince(t0) * 1000)) ms")
-        app.activate(); b.input.tap()
-        check("after settings reset")
-
-        // 2c: removing the keyboard files, then the same after relaunching the app
-        teach(); check("taught again")
-        t0 = Date()
-        let dir = ((NSHomeDirectory() as NSString).appendingPathComponent("../../../../Library/Keyboard") as NSString).standardizingPath
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-        var removed: [String] = []
-        for f in files where f.hasPrefix("zh_Hans") || f.hasPrefix("DynamicPhraseLexicon") || f.hasPrefix("user_model_database") {
-            if (try? FileManager.default.removeItem(atPath: dir + "/" + f)) != nil { removed.append(f) }
+        for round in 1...2 {
+            let t0 = Date()
+            let ok = b.resetLearning()
+            print("RESET|helper \(round)|\(ok)|\(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            check("after helper reset \(round)")
+            if round == 1 { teach(); check("taught again") }
         }
-        print("RESET|files|removed \(removed)|\(Int(Date().timeIntervalSince(t0) * 1000)) ms")
-        check("after removing files")
-        app.terminate(); app.launch(); b.start()
-        check("after removing files + relaunch")
 
-        // 1: OCR against what each tap puts in the field
+        // 1: OCR against what each tap puts in the field; learning undone before each, so the bar read is the bar tapped
         var right = 0, wrong = 0
-        for keys in ["wzdl", "nihao", "shi", "jintian", "zhongguo", "wmqcfb", "yixia", "dajiahao", "yi", "ji", "zhi", "li", "ta", "women", "xianzai", "ok"] where keys != "ok" {
-            b.type(keys)
-            let first = b.bar()
-            line("BAR", keys, first)
-            for (k, c) in first.enumerated() {
-                if k > 0 { b.type(keys); let again = b.bar(); if again.map(\.text) != first.map(\.text) { line("BARCHANGED", keys, again) } }
-                b.tap(c)
+        for keys in ["wzdl", "nihao", "shi", "jintian", "zhongguo", "wmqcfb", "yixia", "dajiahao", "yi", "ji", "zhi", "li", "ta", "women", "xianzai"] {
+            var k = 0
+            while true {
+                b.type(keys)
+                let bar = b.bar()
+                if k == 0 { line("BAR", keys, bar) }
+                guard k < bar.count else { b.clearField(); break }
+                b.tap(bar[k])
                 usleep(300_000)
                 let got = Board.han(b.value)
-                let ok = got == c.text
+                let ok = got == bar[k].text
                 if ok { right += 1 } else { wrong += 1 }
-                print("TAP|\(keys)|\(k)|read=\(c.text)|field=\(got)|\(ok)")
+                print("TAP|\(keys)|\(k)|read=\(bar[k].text)|field=\(got)|\(ok)")
                 b.clearField()
+                b.resetLearning()
+                k += 1
             }
         }
         print("OCRCHECK|right=\(right)|wrong=\(wrong)")

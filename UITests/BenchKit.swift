@@ -58,7 +58,8 @@ final class Board {
     }
 
     /// x of the bar's right end usable for candidates (the expand button is past it)
-    var barRight: CGFloat { app.frame.width - 34 }
+    /// (round 3: the last visible candidate is cut at x≈357 on a 402-wide screen: 选右 for 选在, 辽 for 达)
+    var barRight: CGFloat { app.frame.width - 42 }
     /// gap (points) between two characters above which they belong to different candidates
     static let splitGap: CGFloat = 7
 
@@ -98,7 +99,7 @@ final class Board {
         var out: [Candidate] = []
         for (a, e) in runs {
             let r = CGRect(x: CGFloat(a) / scale, y: top, width: CGFloat(e - a + 1) / scale, height: bottom - top)
-            if cutRight, r.maxX >= barRight - 2 { continue }
+            if cutRight, r.maxX >= barRight - 5 { continue }
             let pad = Int(4 * scale)
             let strip = CGRect(x: max(0, a - pad), y: 0, width: min(w, e + pad + 1) - max(0, a - pad), height: h)
             guard let img = band.cropping(to: strip) else { continue }
@@ -116,6 +117,22 @@ final class Board {
 
     func tap(_ c: Candidate) {
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: c.rect.midX, dy: c.rect.midY)).tap()
+    }
+
+    /// Undo what Apple's keyboard learnt: ask the Mac-side helper (ci/reset_daemon.sh) to remove the keyboard's learnt
+    /// data and restart the keyboard services; then bring the keyboard back. False when the helper did not answer.
+    @discardableResult
+    func resetLearning() -> Bool {
+        let q = "/tmp/applebench"
+        try? FileManager.default.removeItem(atPath: q + "/done")
+        FileManager.default.createFile(atPath: q + "/req", contents: Data())
+        let t0 = Date()
+        while !FileManager.default.fileExists(atPath: q + "/done") {
+            if Date().timeIntervalSince(t0) > 30 { return false }
+            usleep(100_000)
+        }
+        app.terminate(); app.launch(); start()
+        return true
     }
 
     static func hasHan(_ s: String) -> Bool { s.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) } }

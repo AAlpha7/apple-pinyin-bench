@@ -27,10 +27,12 @@ jobs:
         run: |
           brew install xcodegen >/dev/null
           xcodegen generate
+          bash ci/reset_daemon.sh "${{ steps.sim.outputs.udid }}" > daemon.log 2>&1 &
           xcodebuild test -project PinyinBench.xcodeproj -scheme BenchHost -sdk iphonesimulator ${ONLY:+-only-testing:BenchUITests/$ONLY} \
             -destination "id=${{ steps.sim.outputs.udid }}" -resultBundlePath result.xcresult CODE_SIGNING_ALLOWED=NO \
             > test.log 2>&1 || echo "xcodebuild exit $?"
-          grep -E '(KEYBOARD|NODE|NODE_OUTSIDE|PICK|LAT|FIELD|SPRINGBOARD|OCR|BUTTON|SCREEN|TREE|INTRO|BAR|TAP|SPACE|OCRCHECK|SCREEN1|SCREEN2|ABOVEKEYS|GRID|PREDICT|LEARN|TWICE|RESET|FILES|BARCHANGED)\||error:|Test Case|\*\* TEST' test.log || { echo "no result lines; last lines:"; tail -60 test.log; }
+          grep -E '(KEYBOARD|NODE|NODE_OUTSIDE|PICK|LAT|FIELD|SPRINGBOARD|OCR|BUTTON|SCREEN|TREE|INTRO|BAR|TAP|SPACE|OCRCHECK|SCREEN1|SCREEN2|ABOVEKEYS|GRID|PREDICT|LEARN|TWICE|RESET|FILES|BARCHANGED|DAEMON)\||error:|Test Case|\*\* TEST' test.log || { echo "no result lines; last lines:"; tail -60 test.log; }
+          sort daemon.log | uniq -c | head -40
       - name: Screenshots
         if: always()
         uses: actions/upload-artifact@v4
