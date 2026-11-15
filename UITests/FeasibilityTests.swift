@@ -12,6 +12,9 @@ final class FeasibilityTests: XCTestCase {
     override func setUp() {
         continueAfterFailure = true
         app = XCUIApplication()
+        // the keyboards for this app's process too (argument domain), in case the device preference is not read
+        app.launchArguments += ["-AppleKeyboards", "(\"zh_Hans-Pinyin@sw=Pinyin-Simplified;hw=Automatic\")",
+                                "-AppleKeyboardsExpanded", "1"]
         app.launch()
     }
 
@@ -22,15 +25,29 @@ final class FeasibilityTests: XCTestCase {
         let kb = app.keyboards.firstMatch
         XCTAssertTrue(kb.waitForExistence(timeout: 10), "a software keyboard came up (hardware keyboard must be off)")
 
-        // cycle the globe key until a keyboard shows Chinese labels (Apple Pinyin labels its space key in Chinese)
+        // Apple Pinyin is reached when typing letters brings up Chinese candidates; otherwise try the globe key
+        // (on iPhones without a home button it sits below the keyboard, so it is looked for in the whole app too)
         var found = false
         for n in 0..<6 {
             let labels = kb.descendants(matching: .any).allElementsBoundByIndex.map { $0.label }.filter { !$0.isEmpty }
             print("KEYBOARD|\(n)|\(labels.prefix(40).joined(separator: " "))")
-            if labels.contains(where: { $0.contains("空格") || $0.contains("拼音") }) { found = true; break }
-            let globe = kb.buttons["Next keyboard"].exists ? kb.buttons["Next keyboard"] : kb.buttons["下一个键盘"]
-            guard globe.exists else { print("KEYBOARD|no globe key"); break }
-            globe.tap()
+            if kb.keys["n"].exists, kb.keys["i"].exists {
+                kb.keys["n"].tap(); kb.keys["i"].tap()
+                let t0 = Date()
+                while Date().timeIntervalSince(t0) < 3, !found {
+                    found = kb.descendants(matching: .any).allElementsBoundByIndex.contains { isCJK($0.label) }
+                        || app.descendants(matching: .any).allElementsBoundByIndex.contains { isCJK($0.label) }
+                }
+                print("KEYBOARD|\(n)|typed ni, Chinese candidates: \(found)")
+                for _ in 0..<2 { if kb.keys["delete"].exists { kb.keys["delete"].tap() } else if kb.buttons["delete"].exists { kb.buttons["delete"].tap() } }
+                app.buttons["clear"].tap(); input.tap()
+                if found { break }
+            }
+            let names = ["Next keyboard", "下一个键盘", "Next Keyboard"]
+            let globe = names.lazy.map { self.app.buttons[$0] }.first { $0.exists }
+            for b in app.buttons.allElementsBoundByIndex where !b.label.isEmpty { print("BUTTON|\(b.label)|\(b.identifier)") }
+            guard let g = globe else { print("KEYBOARD|no globe key"); break }
+            g.tap()
             sleep(1)
         }
         XCTAssertTrue(found, "Apple Pinyin keyboard reached")
