@@ -13,7 +13,7 @@ jobs:
       - name: Simulator with Apple Pinyin
         id: sim
         run: |
-          ci/setup_sim.sh > udid.txt
+          bash ci/setup_sim.sh > udid.txt
           echo "udid=$(tail -1 udid.txt)" >> "$GITHUB_OUTPUT"
       - name: Build and test
         run: |
