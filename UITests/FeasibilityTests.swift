@@ -26,6 +26,12 @@ final class FeasibilityTests: XCTestCase {
         input.tap()
         let kb = app.keyboards.firstMatch
         XCTAssertTrue(kb.waitForExistence(timeout: 10), "a software keyboard came up (hardware keyboard must be off)")
+        // the first keyboard of a fresh simulator shows the slide-to-type introduction over the keys, which swallows
+        // every key tap; dismiss it (setup_sim.sh also marks it as shown, this is the fallback)
+        for place in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+            let cont = place.buttons["Continue"]
+            if cont.waitForExistence(timeout: 2) { print("INTRO|dismissed in \(place == app ? "app" : "springboard")"); cont.tap() }
+        }
 
         // Apple Pinyin is reached when typing letters brings up Chinese candidates; otherwise try the globe key
         // (on iPhones without a home button it sits below the keyboard, so it is looked for in the whole app too)

@@ -35,5 +35,8 @@ xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "$UDID" -b >/dev/null
 xcrun simctl spawn "$UDID" defaults write -g AppleKeyboards -array "$PINYIN"
 xcrun simctl spawn "$UDID" defaults write -g AppleKeyboardsExpanded -int 1
+# a fresh simulator puts the slide-to-type introduction over the keyboard; mark it shown and turn sliding off
+xcrun simctl spawn "$UDID" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool true
+xcrun simctl spawn "$UDID" defaults write com.apple.Preferences KeyboardContinuousPathEnabled -bool false
 echo "keyboards now: $(xcrun simctl spawn "$UDID" defaults read -g AppleKeyboards | tr -d '\n')" >&2
 echo "$UDID"

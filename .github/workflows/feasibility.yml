@@ -22,7 +22,7 @@ jobs:
           xcodebuild test -project PinyinBench.xcodeproj -scheme BenchHost -sdk iphonesimulator \
             -destination "id=${{ steps.sim.outputs.udid }}" -resultBundlePath result.xcresult CODE_SIGNING_ALLOWED=NO \
             > test.log 2>&1 || echo "xcodebuild exit $?"
-          grep -E '(KEYBOARD|NODE|NODE_OUTSIDE|PICK|LAT|FIELD|SPRINGBOARD|OCR|BUTTON|SCREEN|TREE)\||error:|Test Case|\*\* TEST' test.log || { echo "no result lines; last lines:"; tail -60 test.log; }
+          grep -E '(KEYBOARD|NODE|NODE_OUTSIDE|PICK|LAT|FIELD|SPRINGBOARD|OCR|BUTTON|SCREEN|TREE|INTRO)\||error:|Test Case|\*\* TEST' test.log || { echo "no result lines; last lines:"; tail -60 test.log; }
       - name: Screenshots
         if: always()
         uses: actions/upload-artifact@v4
