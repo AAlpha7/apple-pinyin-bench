@@ -1,0 +1,37 @@
+name: PinyinBench
+options:
+  bundleIdPrefix: bench.pinyin
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  BenchHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    info:
+      path: Host/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: BenchHost
+    settings:
+      base:
+        CODE_SIGNING_ALLOWED: NO
+        GENERATE_INFOPLIST_FILE: NO
+  BenchUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: BenchHost
+    settings:
+      base:
+        CODE_SIGNING_ALLOWED: NO
+        TEST_TARGET_NAME: BenchHost
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  BenchHost:
+    build:
+      targets:
+        BenchHost: all
+    test:
+      targets: [BenchUITests]
