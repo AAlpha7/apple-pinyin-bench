@@ -1,11 +1,13 @@
 import XCTest
+import Vision
 
 /// Stage 1: can Apple Pinyin be driven key by key, and can its candidates be read and tapped from a UI test?
 /// Prints lines the workflow log keeps:
 ///   KEYBOARD|<n>|<what the space key and a few keys are labelled>   one per keyboard the globe key cycles through
-///   NODE|<type>|<label>|<identifier>|<x,y,w,h>                       every element under the keyboard after typing
+///   FIELD|<pinyin>|<the text box while composing>
+///   OCR|<pinyin>|<text read from the screen above the keys>|<x,y,w,h points>|<confidence>
 ///   PICK|<pinyin>|<candidate tapped>|<text box afterwards>|<ok>
-///   LAT|<pinyin>|<ms from the last key tap until the candidate bar shows a CJK label>
+///   LAT|<pinyin>|<ms from the last key tap until Chinese text is read above the keys>
 final class FeasibilityTests: XCTestCase {
     var app: XCUIApplication!
 
@@ -34,9 +36,9 @@ final class FeasibilityTests: XCTestCase {
             if kb.keys["n"].exists, kb.keys["i"].exists {
                 kb.keys["n"].tap(); kb.keys["i"].tap()
                 let t0 = Date()
-                while Date().timeIntervalSince(t0) < 3, !found {
-                    found = kb.descendants(matching: .any).allElementsBoundByIndex.contains { isCJK($0.label) }
-                        || app.descendants(matching: .any).allElementsBoundByIndex.contains { isCJK($0.label) }
+                let top = kb.keys["q"].frame.minY
+                while Date().timeIntervalSince(t0) < 5, !found {
+                    found = ocr(XCUIScreen.main.screenshot().image).contains { $0.rect.maxY <= top + 2 && isCJK($0.text) }
                 }
                 print("KEYBOARD|\(n)|typed ni, Chinese candidates: \(found)")
                 for _ in 0..<2 { if kb.keys["delete"].exists { kb.keys["delete"].tap() } else if kb.buttons["delete"].exists { kb.buttons["delete"].tap() } }
@@ -50,39 +52,39 @@ final class FeasibilityTests: XCTestCase {
             g.tap()
             sleep(1)
         }
-        XCTAssertTrue(found, "Apple Pinyin keyboard reached")
-        guard found else { return }
+        XCTAssertTrue(found, "Apple Pinyin candidates seen (the rest still runs, for the log)")
 
+        // run 4: the candidate bar is not in the accessibility tree (only the keys are), so it is read from a
+        // screenshot with Vision's text recognition, and tapped by position
+        let keysTop = kb.keys["q"].frame.minY
+        let sb = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for (pinyin, want) in [("nihao", "你好"), ("wozhidaole", "我知道了"), ("wzdl", "我知道了"), ("jintiantianqi", "今天天气")] {
             for ch in pinyin {
                 let key = kb.keys[String(ch)]
                 XCTAssertTrue(key.exists, "key \(ch)")
                 key.tap()
             }
+            print("FIELD|\(pinyin)|\((input.value as? String) ?? "-")")
+            for e in sb.descendants(matching: .any).allElementsBoundByIndex where isCJK(e.label) {
+                print("SPRINGBOARD|\(e.elementType.rawValue)|\(e.label)")
+            }
             let t0 = Date()
-            var cjk: [XCUIElement] = []
+            var boxes: [(text: String, rect: CGRect, conf: Float)] = []
             while Date().timeIntervalSince(t0) < 5 {
-                cjk = kb.descendants(matching: .any).allElementsBoundByIndex.filter { isCJK($0.label) }
-                if !cjk.isEmpty { break }
+                boxes = ocr(XCUIScreen.main.screenshot().image).filter { $0.rect.maxY <= keysTop + 2 && isCJK($0.text) }
+                if !boxes.isEmpty { break }
             }
-            print("LAT|\(pinyin)|\(Int(Date().timeIntervalSince(t0) * 1000))")
-            for e in kb.descendants(matching: .any).allElementsBoundByIndex where !e.label.isEmpty || !e.identifier.isEmpty {
-                let f = e.frame
-                print("NODE|\(e.elementType.rawValue)|\(e.label)|\(e.identifier)|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))")
-            }
-            // also outside the keyboard element, in case the candidate bar is a sibling of it
-            for e in app.descendants(matching: .any).allElementsBoundByIndex where isCJK(e.label) && !cjk.contains(e) {
-                let f = e.frame
-                print("NODE_OUTSIDE|\(e.elementType.rawValue)|\(e.label)|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))")
-            }
+            print("LAT|\(pinyin)|\(Int(Date().timeIntervalSince(t0) * 1000)) ms until text above the keys (includes screenshot + OCR time)")
+            for b in boxes { print("OCR|\(pinyin)|\(b.text)|\(Int(b.rect.minX)),\(Int(b.rect.minY)),\(Int(b.rect.width)),\(Int(b.rect.height))|\(String(format: "%.2f", b.conf))") }
             let attach = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
             attach.name = pinyin; attach.lifetime = .keepAlways; add(attach)
-            if let c = cjk.first(where: { $0.label == want }) ?? cjk.first {
-                let picked = c.label
-                c.tap()
+            // the field also shows the composing pinyin; candidates are the boxes in the bar just above the keys
+            let bar = boxes.filter { $0.rect.minY > keysTop - 80 }
+            if let c = bar.first(where: { $0.text.hasPrefix(want) }) ?? bar.first {
+                app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: c.rect.midX, dy: c.rect.midY)).tap()
                 sleep(1)
                 let value = (input.value as? String) ?? ""
-                print("PICK|\(pinyin)|\(picked)|\(value)|\(value.hasSuffix(picked))")
+                print("PICK|\(pinyin)|\(c.text)|\(value)|\(value.contains(want))")
             } else {
                 print("PICK|\(pinyin)|-|-|false")
             }
@@ -91,7 +93,25 @@ final class FeasibilityTests: XCTestCase {
         }
     }
 
+    /// Chinese text on the screen with its box in points (Vision's boxes are normalised, origin bottom left)
+    func ocr(_ image: UIImage) -> [(text: String, rect: CGRect, conf: Float)] {
+        guard let cg = image.cgImage else { return [] }
+        let req = VNRecognizeTextRequest()
+        req.recognitionLanguages = ["zh-Hans", "en-US"]
+        req.recognitionLevel = .accurate
+        req.usesLanguageCorrection = false
+        try? VNImageRequestHandler(cgImage: cg).perform([req])
+        let size = app.frame.size
+        return (req.results ?? []).compactMap { o in
+            guard let top = o.topCandidates(1).first else { return nil }
+            let b = o.boundingBox
+            let r = CGRect(x: b.minX * size.width, y: (1 - b.maxY) * size.height, width: b.width * size.width, height: b.height * size.height)
+            return (top.string, r, top.confidence)
+        }
+    }
+
     func isCJK(_ s: String) -> Bool {
-        !s.isEmpty && s.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) } && !s.contains("空格")
+        !s.isEmpty && s.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+            && !["空格", "删除", "数字", "换行", "确认", "拼音", "下一个键盘"].contains(s.trimmingCharacters(in: .whitespaces))
     }
 }
