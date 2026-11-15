@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   apple-pinyin:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -12,14 +12,17 @@ jobs:
         run: sw_vers -productVersion; xcodebuild -version; xcrun simctl list runtimes | grep iOS
       - name: Simulator with Apple Pinyin
         id: sim
-        run: echo "udid=$(ci/setup_sim.sh | tail -1)" >> "$GITHUB_OUTPUT"
+        run: |
+          ci/setup_sim.sh > udid.txt
+          echo "udid=$(tail -1 udid.txt)" >> "$GITHUB_OUTPUT"
       - name: Build and test
         run: |
           brew install xcodegen >/dev/null
           xcodegen generate
           xcodebuild test -project PinyinBench.xcodeproj -scheme BenchHost -sdk iphonesimulator \
             -destination "id=${{ steps.sim.outputs.udid }}" -resultBundlePath result.xcresult CODE_SIGNING_ALLOWED=NO \
-            2>&1 | grep -E '^(KEYBOARD|NODE|NODE_OUTSIDE|PICK|LAT)\||error:|Test Case|\*\* TEST' || true
+            > test.log 2>&1 || echo "xcodebuild exit $?"
+          grep -E '(KEYBOARD|NODE|NODE_OUTSIDE|PICK|LAT)\||error:|Test Case|\*\* TEST' test.log || { echo "no result lines; last lines:"; tail -60 test.log; }
       - name: Screenshots
         if: always()
         uses: actions/upload-artifact@v4
