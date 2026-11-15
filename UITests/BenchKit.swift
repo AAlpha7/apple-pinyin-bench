@@ -40,53 +40,78 @@ final class Board {
     var value: String { (input.value as? String) ?? "" }
     func clearField() { app.buttons["clear"].tap(); input.tap() }
 
-    /// The candidate bar: the strip just above the keys, cut from the screenshot at full pixel size and read; each
-    /// candidate gets its own box (Vision often reads a whole bar as one line with spaces between candidates, so the
-    /// line is split at its spaces and each part's own box is taken). Sorted left to right. `wait`: read again until
-    /// the bar has Chinese text or the time is up.
-    func bar(wait: TimeInterval = 3) -> [Candidate] {
+    /// The candidate bar: the strip just above the keys, cut from the screenshot at full pixel size and read. Vision
+    /// reads a bar as one or a few lines and glues neighbouring candidates together (时事使十), so each character's own
+    /// box is taken and a line is cut wherever the gap between two characters is wider than the gap inside a candidate
+    /// (characters of one candidate touch; candidates have padding between them). A candidate the bar's right end cuts
+    /// off (it reaches the expand button) is not taken: it is not readable yet, as in the comparison's screens.
+    /// Read until two reads in a row agree, so a bar still changing after the last key is not taken.
+    func bar(wait: TimeInterval = 4) -> [Candidate] {
         let t0 = Date()
+        var last: [Candidate]? = nil
         repeat {
-            let c = read(top: keysTop - 52, bottom: keysTop - 2)
-            if !c.isEmpty || Date().timeIntervalSince(t0) > wait { return c }
+            let c = read(top: keysTop - 50, bottom: keysTop - 10)
+            if let l = last, !c.isEmpty, l.map(\.text) == c.map(\.text) { return c }
+            last = c
+            if Date().timeIntervalSince(t0) > wait { return c }
         } while true
     }
 
+    /// x of the bar's right end usable for candidates (the expand button is past it)
+    var barRight: CGFloat { app.frame.width - 34 }
+    /// gap (points) between two characters above which they belong to different candidates
+    static let splitGap: CGFloat = 7
+
     /// Text read in a band of the screen [top, bottom) (points), split into candidates.
-    func read(top: CGFloat, bottom: CGFloat) -> [Candidate] {
+    /// Candidates are found from the pixels, not from Vision's layout (Vision glues neighbouring candidates and its
+    /// per-character boxes are estimates): a column of the band holds ink when it has pixels much darker than the
+    /// band's background; runs of ink columns closer than `splitGap` belong to one candidate. Each candidate's own
+    /// strip is then read by Vision alone.
+    func read(top: CGFloat, bottom: CGFloat, cutRight: Bool = true) -> [Candidate] {
         let shot = XCUIScreen.main.screenshot().image
         guard let cg = shot.cgImage else { return [] }
         let size = app.frame.size
         let scale = CGFloat(cg.height) / size.height
         let crop = CGRect(x: 0, y: top * scale, width: CGFloat(cg.width), height: (bottom - top) * scale).integral
         guard let band = cg.cropping(to: crop) else { return [] }
-        let req = VNRecognizeTextRequest()
-        req.recognitionLanguages = ["zh-Hans"]
-        req.recognitionLevel = .accurate
-        req.usesLanguageCorrection = false
-        try? VNImageRequestHandler(cgImage: band).perform([req])
-        var out: [Candidate] = []
-        func toPoints(_ b: CGRect) -> CGRect {
-            CGRect(x: b.minX * crop.width / scale, y: top + (1 - b.maxY) * crop.height / scale,
-                   width: b.width * crop.width / scale, height: b.height * crop.height / scale)
-        }
-        for o in req.results ?? [] {
-            guard let t = o.topCandidates(1).first else { continue }
-            let s = t.string
-            var i = s.startIndex
-            while i < s.endIndex {
-                while i < s.endIndex, s[i] == " " { i = s.index(after: i) }
-                guard i < s.endIndex else { break }
-                var j = i
-                while j < s.endIndex, s[j] != " " { j = s.index(after: j) }
-                let part = String(s[i..<j])
-                if let box = try? t.boundingBox(for: i..<j)?.boundingBox, Board.hasHan(part) {
-                    out.append(Candidate(text: part, rect: toPoints(box), conf: t.confidence))
-                }
-                i = j
+        let w = band.width, h = band.height
+        var px = [UInt8](repeating: 0, count: w * h)
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return [] }
+        ctx.draw(band, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let bg = Int(px.sorted()[px.count / 2])        // most of the band is background
+        let ink = (0..<w).map { x in (0..<h).contains { y in abs(Int(px[y * w + x]) - bg) > 90 } }
+        let gap = Int(Board.splitGap * scale)
+        var runs: [(Int, Int)] = []
+        var x = 0
+        while x < w {
+            guard ink[x] else { x += 1; continue }
+            var e = x
+            while e < w {
+                var n = e + 1
+                while n < w, !ink[n], n - e <= gap { n += 1 }
+                if n < w, ink[n], n - e <= gap { e = n } else { break }
             }
+            runs.append((x, e))
+            x = e + 1
         }
-        return out.sorted { $0.rect.minX < $1.rect.minX }
+        var out: [Candidate] = []
+        for (a, e) in runs {
+            let r = CGRect(x: CGFloat(a) / scale, y: top, width: CGFloat(e - a + 1) / scale, height: bottom - top)
+            if cutRight, r.maxX >= barRight - 2 { continue }
+            let pad = Int(4 * scale)
+            let strip = CGRect(x: max(0, a - pad), y: 0, width: min(w, e + pad + 1) - max(0, a - pad), height: h)
+            guard let img = band.cropping(to: strip) else { continue }
+            let req = VNRecognizeTextRequest()
+            req.recognitionLanguages = ["zh-Hans"]
+            req.recognitionLevel = .accurate
+            req.usesLanguageCorrection = false
+            try? VNImageRequestHandler(cgImage: img).perform([req])
+            let texts = (req.results ?? []).compactMap { $0.topCandidates(1).first }
+            let text = Board.han(texts.map(\.string).joined())
+            if !text.isEmpty { out.append(Candidate(text: text, rect: r, conf: texts.map(\.confidence).min() ?? 0)) }
+        }
+        return out
     }
 
     func tap(_ c: Candidate) {

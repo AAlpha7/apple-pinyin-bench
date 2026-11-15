@@ -1,9 +1,9 @@
 import XCTest
 
-/// Round 2 of the feasibility probe: the parts the full comparison rests on.
-/// 1 OCR against the truth: tap each candidate of the first screen and compare what went into the field with what was read.
-/// 2 the space key takes the first candidate; 3 the next screens (swipe the bar, or the expand button); 4 what shows after
-///   a pick with nothing typed (联想); 5 does Apple learn from a pick, and does Settings' Reset Keyboard Dictionary undo it.
+/// Round 3 of the feasibility probe.
+/// 1 OCR (candidates cut from the pixels) against the truth: each candidate of the first screen tapped, what went into the
+///   field compared with what was read. 2 Apple learns from a pick; is that undone by Settings' Reset Keyboard
+///   Dictionary, or by removing the device's keyboard files (and relaunching)?
 final class ProbeTests: XCTestCase {
     var app: XCUIApplication!
     var b: Board!
@@ -20,106 +20,90 @@ final class ProbeTests: XCTestCase {
     func line(_ tag: String, _ key: String, _ cs: [Candidate]) {
         print("\(tag)|\(key)|" + cs.map { "\($0.text)@\(Int($0.rect.minX))-\(Int($0.rect.maxX))" }.joined(separator: " "))
     }
+    func texts(_ keys: String) -> [String] { b.type(keys); let c = b.bar(); b.clearField(); return c.map(\.text) }
 
     func testProbe() throws {
-        // 1 + 2: OCR against what each tap puts in the field
+        // 2a: before anything is picked, the order of a few inputs; then learn (pick a later candidate twice)
+        let probes = ["shi", "yixia", "zhongguo"]
+        var fresh: [String: [String]] = [:]
+        for k in probes { fresh[k] = texts(k); print("LEARN|fresh|\(k)|\(fresh[k]!.joined(separator: " "))") }
+        func teach() {
+            for k in probes {
+                guard let f = fresh[k], f.count > 2 else { continue }
+                for _ in 0..<2 { b.type(k); let c = b.bar(); if let x = c.first(where: { $0.text == f[2] }) { b.tap(x) }; usleep(300_000); b.clearField() }
+            }
+        }
+        func check(_ tag: String) {
+            for k in probes { let t = texts(k); print("LEARN|\(tag)|\(k)|\(t.joined(separator: " "))|same as fresh=\(t == fresh[k]!)") }
+        }
+        teach(); check("taught")
+
+        // 2b: Settings
+        var t0 = Date()
+        let ok = resetDictionary()
+        print("RESET|settings|\(ok)|\(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+        app.activate(); b.input.tap()
+        check("after settings reset")
+
+        // 2c: removing the keyboard files, then the same after relaunching the app
+        teach(); check("taught again")
+        t0 = Date()
+        let dir = ((NSHomeDirectory() as NSString).appendingPathComponent("../../../../Library/Keyboard") as NSString).standardizingPath
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        var removed: [String] = []
+        for f in files where f.hasPrefix("zh_Hans") || f.hasPrefix("DynamicPhraseLexicon") || f.hasPrefix("user_model_database") {
+            if (try? FileManager.default.removeItem(atPath: dir + "/" + f)) != nil { removed.append(f) }
+        }
+        print("RESET|files|removed \(removed)|\(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+        check("after removing files")
+        app.terminate(); app.launch(); b.start()
+        check("after removing files + relaunch")
+
+        // 1: OCR against what each tap puts in the field
         var right = 0, wrong = 0
-        for keys in ["wzdl", "nihao", "shi", "jintian", "zhongguo", "wmqcfb", "yixia", "dajiahao"] {
+        for keys in ["wzdl", "nihao", "shi", "jintian", "zhongguo", "wmqcfb", "yixia", "dajiahao", "yi", "ji", "zhi", "li", "ta", "women", "xianzai", "ok"] where keys != "ok" {
             b.type(keys)
             let first = b.bar()
             line("BAR", keys, first)
             for (k, c) in first.enumerated() {
-                if k > 0 { b.type(keys); _ = b.bar() }
+                if k > 0 { b.type(keys); let again = b.bar(); if again.map(\.text) != first.map(\.text) { line("BARCHANGED", keys, again) } }
                 b.tap(c)
                 usleep(300_000)
                 let got = Board.han(b.value)
-                let ok = got == Board.han(c.text)
+                let ok = got == c.text
                 if ok { right += 1 } else { wrong += 1 }
                 print("TAP|\(keys)|\(k)|read=\(c.text)|field=\(got)|\(ok)")
                 b.clearField()
             }
-            b.type(keys); _ = b.bar()
-            b.space(); usleep(300_000)
-            print("SPACE|\(keys)|first read=\(first.first?.text ?? "-")|field=\(Board.han(b.value))")
-            b.clearField()
         }
         print("OCRCHECK|right=\(right)|wrong=\(wrong)")
-
-        // 3: the next screens
-        b.type("shi")
-        let s1 = b.bar()
-        line("SCREEN1", "shi", s1)
-        let barY = (s1.first?.rect.midY ?? b.keysTop - 25)
-        let from = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 300, dy: barY))
-        let to = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 40, dy: barY))
-        from.press(forDuration: 0.05, thenDragTo: to)
+        // 联想 after a pick
+        b.type("nihao"); if let c = b.bar().first { b.tap(c) }
         usleep(500_000)
-        line("SCREEN2", "shi", b.bar())
-        for e in b.kb.descendants(matching: .any).allElementsBoundByIndex where e.frame.minY < b.keysTop && !e.label.isEmpty {
-            print("ABOVEKEYS|\(e.elementType.rawValue)|\(e.label)|\(e.frame)")
-        }
-        // expand button: right end of the bar
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.width - 20, dy: barY)).tap()
-        usleep(700_000)
-        for y in stride(from: b.keysTop - 52, to: app.frame.height - 40, by: 48) {
-            line("GRID", "shi y\(Int(y))", b.read(top: y, bottom: y + 48))
-        }
+        line("PREDICT", "after 你好", b.bar())
         b.clearField()
-
-        // 4: 联想 after a pick
-        b.type("nihao"); let n = b.bar(); if let c = n.first { b.tap(c) }
-        usleep(500_000)
-        line("PREDICT", "after 你好", b.read(top: b.keysTop - 52, bottom: b.keysTop - 2))
-        b.clearField()
-
-        // 5: learning
-        b.type("shi"); let before = b.bar(); line("LEARN", "before", before)
-        if before.count > 3 { b.tap(before[3]); print("LEARN|picked|\(before[3].text)") }
-        b.clearField()
-        b.type("shi"); line("LEARN", "after one pick", b.bar()); b.clearField()
-        if before.count > 3 { for _ in 0..<2 { b.type("shi"); let c = b.bar(); if let x = c.first(where: { $0.text == before[3].text }) { b.tap(x) }; b.clearField() } }
-        b.type("shi"); line("LEARN", "after three picks", b.bar()); b.clearField()
-        // a sentence typed twice: is the first candidate the same?
-        for i in 0..<2 { b.type("wmqcfb"); let c = b.bar(); line("TWICE", "\(i)", c); if c.count > 1 { b.tap(c[1]) }; b.clearField() }
-        b.type("wmqcfb"); line("TWICE", "after picking the 2nd twice", b.bar()); b.clearField()
-
-        // reset through Settings
-        let t0 = Date()
-        let ok = resetDictionary()
-        print("RESET|\(ok)|\(Int(Date().timeIntervalSince(t0) * 1000)) ms")
-        app.activate(); b.input.tap()
-        b.type("shi"); line("LEARN", "after reset", b.bar()); b.clearField()
-        b.type("wmqcfb"); line("TWICE", "after reset", b.bar()); b.clearField()
-
-        // the device's keyboard data, seen from the test runner (could a reset be done by removing files?)
-        let home = NSHomeDirectory()
-        print("FILES|home \(home)")
-        for p in ["/../../../../Library/Keyboard", "/../../../../../Library/Keyboard"] {
-            let d = (home + p as NSString).standardizingPath
-            print("FILES|\(d)|\((try? FileManager.default.contentsOfDirectory(atPath: d)) ?? ["(cannot list)"])")
-        }
     }
 
     /// Settings > General > Transfer or Reset iPhone > Reset > Reset Keyboard Dictionary
     func resetDictionary() -> Bool {
         let s = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
         s.terminate(); s.launch()
-        func go(_ labels: [String]) -> Bool {
-            for l in labels {
-                for q in [s.cells[l], s.buttons[l], s.staticTexts[l]] where q.waitForExistence(timeout: 3) { q.tap(); return true }
+        func find(_ labels: [String], scroll: Bool = false) -> XCUIElement? {
+            for attempt in 0..<(scroll ? 6 : 1) {
+                for l in labels { for q in [s.cells[l], s.buttons[l], s.staticTexts[l]] where q.waitForExistence(timeout: attempt == 0 ? 3 : 1) && q.isHittable { return q } }
+                if scroll { s.swipeUp() }
             }
-            print("RESET|missing \(labels)|on screen: " + s.descendants(matching: .any).allElementsBoundByIndex.prefix(60).map { $0.label }.filter { !$0.isEmpty }.joined(separator: " / "))
-            return false
+            print("RESET|missing \(labels)|on screen: " + s.descendants(matching: .any).allElementsBoundByIndex.prefix(80).map { $0.label }.filter { !$0.isEmpty }.joined(separator: " / "))
+            return nil
         }
-        guard go(["General", "通用"]) else { return false }
-        s.swipeUp()
-        guard go(["Transfer or Reset iPhone", "传输或还原 iPhone"]) else { return false }
-        guard go(["Reset", "还原"]) else { return false }
-        guard go(["Reset Keyboard Dictionary", "还原键盘字典"]) else { return false }
+        guard let g = find(["General", "通用"]) else { return false }; g.tap()
+        guard let t = find(["Transfer or Reset iPhone", "传输或还原 iPhone"], scroll: true) else { return false }; t.tap()
+        guard let r = find(["Reset", "还原"]) else { return false }; r.tap()
+        guard let k = find(["Reset Keyboard Dictionary", "还原键盘字典"]) else { return false }; k.tap()
         usleep(500_000)
+        for e in s.descendants(matching: .any).allElementsBoundByIndex where e.elementType == .button { print("RESET|button|\(e.label)") }
         let confirm = s.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Reset Dictionary' OR label CONTAINS '还原字典'")).firstMatch
-        if confirm.waitForExistence(timeout: 3) { confirm.tap(); return true }
-        print("RESET|no confirm|" + s.buttons.allElementsBoundByIndex.map { $0.label }.joined(separator: " / "))
+        if confirm.waitForExistence(timeout: 3) { confirm.tap(); usleep(1_000_000); return true }
         return false
     }
 }
