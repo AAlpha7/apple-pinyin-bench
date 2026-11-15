@@ -64,7 +64,14 @@ final class FeasibilityTests: XCTestCase {
                 XCTAssertTrue(key.exists, "key \(ch)")
                 key.tap()
             }
-            print("FIELD|\(pinyin)|\((input.value as? String) ?? "-")")
+            print("FIELD|\(pinyin)|value=\((input.value as? String) ?? "-")|placeholder=\(input.placeholderValue ?? "-")|keyboard top \(Int(keysTop)) frame \(kb.frame)")
+            // everything Vision reads anywhere on the screen, top to bottom (where is the composition, if anywhere?)
+            for b in ocr(XCUIScreen.main.screenshot().image).sorted(by: { $0.rect.minY < $1.rect.minY }) {
+                print("SCREEN|\(pinyin)|\(b.text)|\(Int(b.rect.minX)),\(Int(b.rect.minY)),\(Int(b.rect.width)),\(Int(b.rect.height))|\(String(format: "%.2f", b.conf))")
+            }
+            if pinyin == "nihao" {
+                for line in app.debugDescription.split(separator: "\n") where !line.contains("Padding") { print("TREE|\(line)") }
+            }
             for e in sb.descendants(matching: .any).allElementsBoundByIndex where isCJK(e.label) {
                 print("SPRINGBOARD|\(e.elementType.rawValue)|\(e.label)")
             }
